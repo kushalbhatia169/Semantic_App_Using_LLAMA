@@ -64,12 +64,18 @@ namespace Semantic_App_Using_LLAMA
 
             Console.WriteLine("[INTERNAL LOG]: Generating Organization Preview...");
             var files = Directory.GetFiles(path);
+            if (files.Length == 0) return "The folder is empty.";
+
             var counts = files.GroupBy(f => Path.GetExtension(f).ToLower())
                               .Select(g => $"{g.Key}: {g.Count()} files")
                               .ToList();
 
-            return $"I found {files.Length} files. Plan: Move them by extension into subfolders. " +
-                   $"Breakdown: {string.Join(", ", counts)}. Should I proceed with the move?";
+            string planDescription = string.Join(", ", counts);
+
+            // Ye plan terminal par bhi dikhega aur AI ko bhi jayega
+            Console.WriteLine($"[PLAN GENERATED]: {planDescription}");
+
+            return $"I found {files.Length} files. My plan is to move them like this: {planDescription}. Should I proceed?";
         }
 
         [KernelFunction]
