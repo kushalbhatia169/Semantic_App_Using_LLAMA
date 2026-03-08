@@ -1,111 +1,155 @@
 ﻿using Microsoft.SemanticKernel;
-using System;
-using System.Collections.Generic;
+using Microsoft.SemanticKernel.ChatCompletion;
 using System.ComponentModel;
-using System.Text;
+using System.Diagnostics;
 
-namespace Semantic_App_Using_LLAMA
+namespace Semantic_App_Using_LLAMA;
+
+public class AITools(IChatCompletionService chatService)
 {
-    public class AITools
+    private readonly IChatCompletionService _chatService = chatService;
+
+    [KernelFunction]
+    [Description("Counts the number of files in a folder")]
+    public static int GetFileCount(string path)
     {
-        [KernelFunction] // Ye attribute AI ko batata hai ki ye "Tool" hai
-        [Description("Counts the number of files in a given folder path.")]
-        public static int GetFileCount([Description("The full path of the folder")] string path)
+        Console.WriteLine("[TOOL] GetFileCount");
+        return Directory.Exists(path) ? Directory.GetFiles(path).Length : 0;
+    }
+
+    [KernelFunction]
+    [Description("Gets the current system time")]
+    public static string GetCurrentTime()
+    {
+        Console.WriteLine("[TOOL] GetCurrentTime");
+        return DateTime.Now.ToString("F");
+    }
+
+    [KernelFunction]
+    [Description("Creates a new folder")]
+    public static string CreateFolder(string path)
+    {
+        try
         {
-            Console.WriteLine($"[INTERNAL LOG]: Executing GetFileCount Function");
-            return Directory.GetFiles(path).Length;
+            if (Directory.Exists(path))
+                return "Directory already exists.";
+
+            Directory.CreateDirectory(path);
+            return $"Folder created at {path}";
         }
-
-        [KernelFunction]
-        [Description("Gets the current system time.")]
-        public static string GetCurrentTime() 
+        catch (Exception ex)
         {
-            Console.WriteLine($"[INTERNAL LOG]: Executing GetCurrentTime Function");
-            return DateTime.Now.ToString("F");
+            return $"Error creating folder: {ex.Message}";
         }
+    }
 
-        [KernelFunction]
-        [Description("Creates a new folder at the specified path.")]
-        public static string CreateFolder([Description("The full path of the folder to create")] string path)
+    [KernelFunction]
+    [Description("Finds files with a given extension")]
+    public static List<string?> GetFilesByExtension(string path, string extension)
+    {
+        Console.WriteLine($"[TOOL] Searching {extension} in {path}");
+
+        if (!Directory.Exists(path))
+            return [];
+
+        return [.. Directory
+            .EnumerateFiles(path, $"*{extension}")
+            .Select(Path.GetFileName)];
+    }
+
+    [KernelFunction]
+    [Description("Generates a folder organization preview")]
+    public static string GetOrganizationPreview(string path)
+    {
+        if (!Directory.Exists(path))
+            return "Path not found.";
+
+        var files = Directory.GetFiles(path);
+
+        if (files.Length == 0)
+            return "Folder is empty.";
+
+        var counts = files
+            .GroupBy(f => Path.GetExtension(f).ToLower())
+            .Select(g => $"{g.Key}: {g.Count()} files");
+
+        return $"Found {files.Length} files. Plan: {string.Join(", ", counts)}. Should I proceed?";
+    }
+
+    [KernelFunction]
+    [Description("Executes the organization plan")]
+    public static string ExecuteMove(string path)
+    {
+        if (!Directory.Exists(path))
+            return "Path not found.";
+
+        var files = Directory.GetFiles(path);
+        int moved = 0;
+
+        foreach (var file in files)
         {
-            // THIS LOG PROVES IF THE CODE IS ACTUALLY RUNNING
-            Console.WriteLine($"[INTERNAL LOG]: Executing CreateDirectory for path: {path}");
+            string ext = Path.GetExtension(file).ToLower();
 
-            try
+            string folder = ext switch
             {
-                if (Directory.Exists(path)) return "Directory already exists.";
-                Directory.CreateDirectory(path);
-                return $"SUCCESS: Directory created at {path}";
-            }
-            catch (Exception ex)
+                ".jpg" or ".png" => "Photos",
+                ".pdf" or ".docx" or ".txt" => "Documents",
+                ".cs" or ".json" => "Specpoint_Dev",
+                _ => "Others"
+            };
+
+            string target = Path.Combine(path, folder);
+            Directory.CreateDirectory(target);
+
+            File.Move(file, Path.Combine(target, Path.GetFileName(file)), true);
+            moved++;
+        }
+
+        return $"Moved {moved} files.";
+    }
+
+    [KernelFunction]
+    [Description("Summarizes a file")]
+    public async Task<string> SummarizeFile(string filePath)
+    {
+        Console.WriteLine($"[TOOL] Summarizing {filePath}");
+
+        return await FileSummarizer.SummarizeFileAsync(filePath, _chatService);
+    }
+
+    [KernelFunction]
+    [Description("Opens a folder")]
+    public static string OpenFolder(string path)
+    {
+        if (!Directory.Exists(path))
+            return "Folder not found.";
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = path,
+            UseShellExecute = true
+        });
+
+        return $"Opened folder {path}";
+    }
+
+    [KernelFunction]
+    [Description("Launches a file, folder, or app")]
+    public static string Launch(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
             {
-                return $"ERROR: Could not create directory. {ex.Message}";
-            }
+                FileName = path,
+                UseShellExecute = true
+            });
+
+            return $"Opened {path}";
         }
-
-        [KernelFunction]
-        [Description("Finds and lists files with a specific extension in a directory.")]
-        public List<string> GetFilesByExtension(
-        [Description("Full path to the directory")] string path,
-        [Description("The file extension to look for (e.g., .cs, .json, .pdf)")] string extension)
+        catch
         {
-            Console.WriteLine($"[INTERNAL LOG]: Searching for {extension} files in {path}");
-            var files = Directory.GetFiles(path, $"*{extension}")
-                                 .Select(Path.GetFileName)
-                                 .ToList();
-            return files;
-        }
-
-        [KernelFunction]
-        [Description("Scans a folder and returns a count of files and a plan for organization. Call this BEFORE moving files.")]
-        public string GetOrganizationPreview([Description("The path to the folder")] string path)
-        {
-            if (!Directory.Exists(path)) return "Path not found.";
-
-            Console.WriteLine("[INTERNAL LOG]: Generating Organization Preview...");
-            var files = Directory.GetFiles(path);
-            if (files.Length == 0) return "The folder is empty.";
-
-            var counts = files.GroupBy(f => Path.GetExtension(f).ToLower())
-                              .Select(g => $"{g.Key}: {g.Count()} files")
-                              .ToList();
-
-            string planDescription = string.Join(", ", counts);
-
-            // Ye plan terminal par bhi dikhega aur AI ko bhi jayega
-            Console.WriteLine($"[PLAN GENERATED]: {planDescription}");
-
-            return $"I found {files.Length} files. My plan is to move them like this: {planDescription}. Should I proceed?";
-        }
-
-        [KernelFunction]
-        [Description("Actually moves files into categorized subfolders. ONLY call this after the user says 'Yes' or 'Proceed'.")]
-        public string ExecuteMove([Description("The path to the folder")] string path)
-        {
-            if (!Directory.Exists(path)) return "Path not found.";
-
-            Console.WriteLine("[INTERNAL LOG]: Executing Actual File Move...");
-            var files = Directory.GetFiles(path);
-            int count = 0;
-
-            foreach (var file in files)
-            {
-                string ext = Path.GetExtension(file).ToLower();
-                string folderName = ext switch
-                {
-                    ".jpg" or ".png" => "Photos",
-                    ".pdf" or ".docx" or ".txt" => "Documents",
-                    ".cs" or ".json" => "Specpoint_Dev",
-                    _ => "Others"
-                };
-
-                string targetDir = Path.Combine(path, folderName);
-                if (!Directory.Exists(targetDir)) Directory.CreateDirectory(targetDir);
-
-                File.Move(file, Path.Combine(targetDir, Path.GetFileName(file)));
-                count++;
-            }
-            return $"Success! {count} files moved to categorized folders.";
+            return "Failed to open.";
         }
     }
 }

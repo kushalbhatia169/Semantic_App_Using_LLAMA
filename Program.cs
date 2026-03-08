@@ -7,75 +7,89 @@ namespace Semantic_App_Using_LLAMA;
 
 class Program
 {
-    static async Task Main(string[] args)
+    static async Task Main()
     {
         var builder = Kernel.CreateBuilder();
 
-        // 1. Setup HttpClient & Services
-        builder.Services.AddHttpClient("OllamaClient", client => {
+        builder.Services.AddHttpClient("OllamaClient", client =>
+        {
             client.Timeout = TimeSpan.FromMinutes(10);
         });
 
-        // Register Tools with clear name
-        builder.Plugins.AddFromType<AITools>("AITools");
-
-        // Use Llama 3.1 or 3.2 (Important to avoid 400 Error)
         builder.AddOpenAIChatCompletion(
-            modelId: "llama3.1",
+            modelId: "qwen2.5:7b",
             apiKey: "none",
             endpoint: new Uri("http://localhost:11434/v1")
         );
 
         var kernel = builder.Build();
 
-        // --- MANUALLY TRIGGER FIRST (The part I missed) ---
-        Console.WriteLine("--- Phase 1: Manual Tool Invocation ---");
+        var chatService = kernel.GetRequiredService<IChatCompletionService>();
 
-        var answer = await kernel.InvokeAsync("AITools", "GetFileCount",
-            new() { ["path"] = @"C:\Users\kusha\Downloads" });
-        Console.WriteLine($"Direct Tool Answer (File Count): {answer}");
-
-        // --- AGENT PROMPT TRIGGER ---
-        Console.WriteLine("\n--- Phase 2: Agent Intent Execution ---");
+        // Register tools
+        kernel.Plugins.AddFromObject(new AITools(chatService), "AITools");
 
         var settings = new OpenAIPromptExecutionSettings
         {
             ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
-            Temperature = 0
+            Temperature = 0.1
         };
 
-        string prompt = "Tell me the current system time then Check file count in C:\\Users\\kusha\\Downloads and create 'Specpoint_Verified' folder there.";
+        //var answer = await kernel.InvokeAsync("AITools", "GetFileCount",
+        //   new() { ["path"] = @"C:\Users\kusha\Downloads" });
+        //Console.WriteLine($"Direct Tool Answer (File Count): {answer}");
 
-        // Passing kernel here is MUST for auto-invocation
-        var result = await kernel.InvokePromptAsync(prompt, new(settings));
-        Console.WriteLine($"Agent Execution Result: {result}");
+        //// --- AGENT PROMPT TRIGGER ---
+        //Console.WriteLine("\n--- Phase 2: Agent Intent Execution ---");
 
-        // --- CONTINUOUS CHAT LOOP ---
-        Console.WriteLine("\n--- Phase 3: Persistent Chat Agent ---");
+        //string prompt = "Tell me the current system time then Check file count in C:\\Users\\kusha\\Downloads and create 'Specpoint_Verified' folder there.";
 
-        var chatService = kernel.GetRequiredService<IChatCompletionService>();
-        var history = new ChatHistory(@"You are a cautious system agent. . Execute tools for file tasks. If not a file task, just chat.
-        1. For organizing files, ALWAYS call 'GetOrganizationPreview' first.
-        2. DO NOT call 'ExecuteMove' until the user explicitly confirms with 'Yes' or 'Proceed'.
-        3. Be professional and wait for human confirmation for safety.");
+        //// Passing kernel here is MUST for auto-invocation
+        //var result = await kernel.InvokePromptAsync(prompt, new(settings));
+        //Console.WriteLine($"Agent Execution Result: {result}");
+
+        var history = new ChatHistory(
+        """
+        You are Gemini, a high-performance AI agent for Kushal (Senior Developer).
+
+        RULES:
+        - Never show tool JSON to the user
+        - Use AITools plugin for all file operations
+        - Always find real filenames before summarizing
+        - Never hallucinate file paths
+        - Be concise and action oriented
+        """
+        );
+
+        Console.WriteLine("🚀 Gemini File Agent Ready");
+
         while (true)
         {
             Console.Write("\nYou: ");
             var userMessage = Console.ReadLine();
-            if (string.IsNullOrWhiteSpace(userMessage)) break;
+
+            if (string.IsNullOrWhiteSpace(userMessage))
+                break;
 
             history.AddUserMessage(userMessage);
 
-            // 
-            var response = await chatService.GetChatMessageContentAsync(
-                history,
-                executionSettings: settings,
-                kernel: kernel); // Auto-invokes tools if AI decides to
+            ChatMessageContent response;
 
-            if (response.Content != null)
+            do
             {
-                Console.WriteLine($"\nBot: {response.Content}");
-                history.AddAssistantMessage(response.Content);
+                response = await chatService.GetChatMessageContentAsync(
+                    history,
+                    executionSettings: settings,
+                    kernel: kernel
+                );
+
+                history.Add(response);
+
+            } while (response.Items?.Any(i => i is FunctionCallContent) == true);
+
+            if (!string.IsNullOrWhiteSpace(response.Content))
+            {
+                Console.WriteLine($"\nGemini: {response.Content}");
             }
         }
     }
